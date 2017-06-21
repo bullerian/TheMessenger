@@ -15,6 +15,10 @@
 #define DEFAULT_SRV_PRT     1313
 #define DEFAULT_SRV_IP_STR  "127.0.0.1"
 #define SERVICE_CODE        0xFAFAFAFA
+#define DIR_SEND            0
+#define DIR_RECV            1
+#define ERROR_RETVAL        -1
+#define SUCCESS_RETVAL      0
 
 enum status_e {ONLINE, BUSY, AWAY, OFFLINE};
 enum contentType_e {PEER_LIST, MESSAGE, STAT, FILE_TRANS};
@@ -22,9 +26,7 @@ enum contentType_e {PEER_LIST, MESSAGE, STAT, FILE_TRANS};
 typedef struct peerParam{
     char name[NAME_LEN];
     enum status_e status;
-    struct peerParam* next;
 } peerParam_t;
-
 
 typedef struct {
     uint32_t serviceCode;
@@ -41,9 +43,19 @@ int TCPfd;
 struct sockaddr_in serveraddr;
 peerParam_t myParams;
 char* StatusStrings[]={"Online", "Busy", "Away", "Offline"};
+
+struct peerArray_s{
+    peerParam_t* peerArr_p;
+    size_t size;
+};
+
 /////////////////////////////////////////////////////////////////////////
 
-int parseAddrStr(struct sockaddr_in* socketAddress, char *addrString);
+static int parseAddrStr(struct sockaddr_in* socketAddress, char *addrString);
+static int sendRecv_all(int fd, char *buf, int len, int direction);
+int disconFromSev(void);
+int connToSrv(void);
+
 
 //////////////////////////PROGRAM////////////////////////////////////////
 
@@ -108,14 +120,14 @@ int main(int argc,char **argv)
     return 0;
 }
 
-int parseAddrStr(struct sockaddr_in* socketAddress, char* addrString){
+static int parseAddrStr(struct sockaddr_in* socketAddress, char* addrString){
     int port;
     in_addr_t ip;
     char * delimiter;
 
     if ((delimiter=strchr(addrString, ':'))==NULL){
         syslog(LOG_DEBUG, "Invalid socket string argument (: is missing)\n");
-        return -1;
+        return ERROR_RETVAL;
     }
 
     port=atoi((delimiter+1));
@@ -124,7 +136,7 @@ int parseAddrStr(struct sockaddr_in* socketAddress, char* addrString){
 
     if (inet_pton(AF_INET, addrString, (void*) &ip) <= 0) {
         syslog(LOG_DEBUG, "Can't convert from string to IP.\n");
-        return -1;
+        return ERROR_RETVAL;
     }
 
     memset(socketAddress, '\0', sizeof(*socketAddress));
@@ -133,28 +145,31 @@ int parseAddrStr(struct sockaddr_in* socketAddress, char* addrString){
     socketAddress->sin_port=htons(port);
     socketAddress->sin_addr.s_addr=ip;
 
+    return SUCCESS_RETVAL;
+}
+
+int connToSrv(void){
+    if (connect(TCPfd, (struct sockaddr *) &serveraddr, sizeof(serveraddr)) == -1){
+        syslog(LOG_ERR, "Connection to server failed. Error %d\n", errno);
+        return -1;
+    }
+
     return 0;
 }
 
-
-int connToSrv(){
-    int retVal=0;
-
-    if (connect(TCPfd, (struct sockaddr *) &serveraddr, sizeof(serveraddr)) == -1){
-        syslog(LOG_ERR, "Connection to server failed. Error %d\n", errno);
-        retVal=-1;
+int disconFromSev(void){
+    if (close(TCPfd) == -1){
+        syslog(LOG_ERR, "Socket closing failed. Error %d\n", errno);
+        return -1;
     }
 
-    return retVal;
+    return 0;
 }
 
 void * getpeerArrMsg(void* args){
-    ssize_t transferSize=0;
-    peerParam_t* peerBufferp;
-    char* buff_ptr, endRange;
+    struct peerArray_s* newPeerArray=(struct peerArray_s*)args;
 
-
-    // request to server for peerArray
+    // request to server to get all connected peers
     messageHeader_t peerArrMsg;
     peerArrMsg.serviceCode=SERVICE_CODE;
     peerArrMsg.type=(int8_t) PEER_LIST;
@@ -162,47 +177,59 @@ void * getpeerArrMsg(void* args){
 
     connToSrv();
 
-    while(transferSize != sizeof(peerArrMsg)){
-        transferSize=send(TCPfd, &peerArrMsg, sizeof(peerArrMsg), 0);
+    if(sendRecv_all(TCPfd, (char*)&peerArrMsg, sizeof(peerArrMsg), DIR_SEND) == -1){
+        syslog(LOG_ERR, "Request to server for peerArray failed. Error %d\n", errno);
+        disconFromSev();
+        return NULL;
     }
 
-    transferSize=0;
+    // recv reply from server with peerArr message header
+    if(sendRecv_all(TCPfd, (char*)&peerArrMsg, sizeof(peerArrMsg), DIR_RECV) == -1){
+        syslog(LOG_ERR, "Recv reply from server with message header failed. Error %d\n", errno);
+        disconFromSev();
+        return NULL;
+    }
 
-    // recv reply from server with message header
-    while(transferSize != sizeof(peerArrMsg)){
-        transferSize=recv(TCPfd, &peers, sizeof(peerArrMsg), 0);
+    //process recieved header
+    if (peerArrMsg.serviceCode != SERVICE_CODE || peerArrMsg.type != PEER_LIST){
+        syslog(LOG_ERR, "Invalid reply from server. Expected peerList.");
+        disconFromSev();
+        return NULL;
     }
 
     //allocate memory for all of peerParam structs
-    peerBufferp=malloc(peerArrMsg.size);
-    buff_ptr=peerBufferp;
+    newPeerArray->peerArr_p=malloc(peerArrMsg.size);
+    newPeerArray->size=peerArrMsg.size;
 
-    transferSize=0;
-
-    while(buff_ptr != (peerBufferp+peerArrMsg.size)){
-        transferSize=recv(TCPfd, buff_ptr, sizeof(peerArrMsg), 0);
-        buff_ptr+=transferSize;
+    // recv peerArray
+    if(sendRecv_all(TCPfd, (char*) newPeerArray->peerArr_p, peerArrMsg.size, DIR_RECV) == -1){
+        syslog(LOG_ERR, "Recv reply from server with message header failed. Error %d\n", errno);
+        disconFromSev();
+        free(newPeerArray->peerArr_p);
+        return NULL;
     }
 
-
+    return (void*) newPeerArray;
 }
 
-int sendall(int s, char *buf, int *len)
+// send or recieve the whole buf
+// direction -- DIR_SEND or DIR_RECV
+static int sendRecv_all(int fd, char *buf, int len, int direction)
 {
-    int total = 0;        // how many bytes we've sent
-    int bytesleft = *len; // how many we have left to send
+    int total = 0;        // sent bytes
+    int bytesleft = len; // left to send
     int n;
 
-    while(total < *len) {
-        n = send(s, buf+total, bytesleft, 0);
+    while(total < len) {
+        n = direction ? (recv(fd, buf+total, bytesleft, 0)):(send(fd, buf+total, bytesleft, 0));
         if (n == -1) { break; }
         total += n;
         bytesleft -= n;
     }
 
-    *len = total; // return number actually sent here
+    len = total; // return number actually sent here
 
-    return n==-1?-1:0; // return -1 on failure, 0 on success
+    return n==-1?ERROR_RETVAL:SUCCESS_RETVAL; // return -1 on failure, 0 on success
 }
 
 //closelog();
