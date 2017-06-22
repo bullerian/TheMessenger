@@ -265,7 +265,9 @@ void * updatePresence(void* status){
 void * sendRecv_Mail(void * arg){
     messageHeader_t pollMsg;
     letter_t* newLetter;
-    int isSend=arg ? 1:0;
+    int isSend=newLetter->textSize ? 1 : 0;
+    unsigned int errorNumber=0;
+    char* errorString;
 
     pollMsg.serviceCode=SERVICE_CODE;
     pollMsg.type=LETTER;
@@ -278,39 +280,72 @@ void * sendRecv_Mail(void * arg){
         newLetter=(letter_t *) arg;
         pollMsg.size=sizeof(letter_t);
 
+        // send header that indicates presence of new message
         if(sendRecv_all(TCPfd, (char*)&pollMsg, sizeof(pollMsg), DIR_SEND) == ERROR_RETVAL)
         {
-
+            errorNumber=errno;
+            errorString="Sending header that indicates presence of new message failed. Reason %s.";
         }
+        //send letter structure
         else if (sendRecv_all(TCPfd, (char*) newLetter, sizeof(letter_t), DIR_SEND) == ERROR_RETVAL)
         {
-
+            errorNumber=errno;
+            errorString="Sending letter structure failed. Reason %s.";
         }
+        // send letter text
         else if (sendRecv_all(TCPfd, newLetter->text, newLetter->textSize, DIR_SEND) == ERROR_RETVAL)
         {
-
+            errorNumber=errno;
+            errorString="Sending letter text failed. Reason %s.";
         }
-
-
     }else{
         pollMsg.size=0;
 
+        // send header with size 0
+        // this indicates that clien is polling for new letters
         if(sendRecv_all(TCPfd, (char*)&pollMsg, sizeof(pollMsg), DIR_SEND) == ERROR_RETVAL)
         {
-
+            errorNumber=errno;
+            errorString="Sending header with size 0. Reason %s.";
         }
-
-        if (pollMsg.size)
+        // recv message header
+        else if (sendRecv_all(TCPfd, (char*)&pollMsg, sizeof(pollMsg), DIR_RECV) == ERROR_RETVAL)
         {
-            if (sendRecv_all(TCPfd, (char*)newLetter, sizeof(letter_t), DIR_RECV) == ERROR_RETVAL){
+            errorNumber=errno;
+            errorString="Recieving message header from server. Reason %s.";
+        }
+        // if recieved message header size is greater that 0
+        // than there is new letter
+        else if (pollMsg.size > 0)
+        {
+            // recv letter struct
+            if (sendRecv_all(TCPfd, (char*)newLetter, sizeof(letter_t), DIR_RECV) == SUCCESS_RETVAL)
+            {
+                newLetter->text=malloc(newLetter->textSize);
 
-            } else if()
+                //recv letter text
+                if(sendRecv_all(TCPfd, (char*)newLetter->text, newLetter->textSize, DIR_RECV) == ERROR_RETVAL)
+                {
+                    free(newLetter->text);
+                    errorNumber=errno;
+                    errorString="Recieving letter text from server. Reason %s.";
+                }
+            }
+            else
+            {
+                errorNumber=errno;
+                errorString="Recieving letter struct from server failed. Reason %s.";
+            }
         }
     }
 
+    if(!errorNumber){
+        disconFromSev();
+        syslog(LOG_ERR, errorString, errorNumber);
+        return NULL;
+    }
 
-
-
+    return (void*) arg;
 }
 
 
