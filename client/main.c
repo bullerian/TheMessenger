@@ -10,15 +10,20 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <syslog.h>
+#include <time.h>
 
 #define NAME_LEN            30
-#define DEFAULT_SRV_PRT     1313
-#define DEFAULT_SRV_IP_STR  "127.0.0.1"
 #define SERVICE_CODE        0xFAFAFAFA
 #define DIR_SEND            0
 #define DIR_RECV            1
-#define ERROR_RETVAL        -1
+#define ERROR_RETVAL        (-1)
 #define SUCCESS_RETVAL      0
+#define STATUS_STATES       4
+
+
+
+#define FALSE               0
+#define TRUE                (!FALSE)
 
 enum status_e {ONLINE, BUSY, AWAY, OFFLINE};
 enum contentType_e {PEER_LIST, LETTER, STAT, FILE_TRANS, NOP};
@@ -41,6 +46,12 @@ typedef struct {
 } letter_t;
 
 //////////// Client Variables///////////////////////////////////////////
+
+#define CONN_RETR_COUNT     2
+#define CONN_RETR_DELAY_MS  50
+#define DEFAULT_SRV_PRT     1313
+#define DEFAULT_SRV_IP_STR  "127.0.0.1"
+
 char* msgIn;
 char* msgOut;
 
@@ -48,7 +59,7 @@ int TCPfd;
 struct sockaddr_in serveraddr;
 peerParam_t myParams;
 char* StatusStrings[]={"Online", "Busy", "Away", "Offline"};
-
+char* Stat_cl_paramStr[]={"on", "bu", "aw", "of"};
 struct peerArray_s{
     peerParam_t* peerArr_p;
     size_t size;
@@ -57,6 +68,7 @@ struct peerArray_s{
 /////////////////////////////////////////////////////////////////////////
 
 static int parseAddrStr(struct sockaddr_in* socketAddress, char *addrString);
+static int parseStatusStr(peerParam_t* myParams, char * statusStr);
 static int sendRecv_all(int fd, char *buf, int len, int direction);
 int disconFromSev(void);
 int connToSrv(void);
@@ -110,11 +122,12 @@ int Init(int argc, char **argv){
     }
 
     // copy entered name to parametres structure
-    strncpy(&myParams.name, &argv[optind], NAME_LEN-1);
+    strncpy(myParams.name, argv[optind], NAME_LEN-1);
 
-    //parse entered parameteres
-    if (parseAddrStr(&serveraddr, socketStr) == -1){
-        syslog(LOG_ERR, "Can't parse address string \"%s\"\n", socketStr);
+    //parse address and status
+    if ((parseAddrStr(&serveraddr, socketStr) == ERROR_RETVAL) ||\
+            (parseStatusStr(&myParams, statusStr) == ERROR_RETVAL)){
+        syslog(LOG_ERR, "Can't parse address or status string\n");
     }
 
     // connect to socket
@@ -161,13 +174,26 @@ static int parseAddrStr(struct sockaddr_in* socketAddress, char* addrString){
     return SUCCESS_RETVAL;
 }
 
+
+// creates connection to server
+// makes CONN_RETR_COUNT connection attempts with delay CONN_RETR_DELAY_MS
 int connToSrv(void){
-    if (connect(TCPfd, (struct sockaddr *) &serveraddr, sizeof(serveraddr)) == -1){
-        syslog(LOG_ERR, "Connection to server failed. Error %d\n", errno);
-        return -1;
+    unsigned int retryCount=CONN_RETR_COUNT;
+    unsigned int retryDelayUs=CONN_RETR_DELAY_MS * 100;
+
+    while(retryCount--){
+        if (connect(TCPfd, (struct sockaddr *) &serveraddr,\
+                    sizeof(serveraddr)) == SUCCESS_RETVAL){
+            return SUCCESS_RETVAL;
+        }
+
+        syslog(LOG_ERR, "Connection to server failed. Retry count %d. Error %d\n",\
+               retryCount, errno);
+
+        usleep(retryDelayUs);
     }
 
-    return 0;
+    return ERROR_RETVAL;
 }
 
 int disconFromSev(void){
@@ -284,19 +310,19 @@ void * sendRecv_Mail(void * arg){
         if(sendRecv_all(TCPfd, (char*)&pollMsg, sizeof(pollMsg), DIR_SEND) == ERROR_RETVAL)
         {
             errorNumber=errno;
-            errorString="Sending header that indicates presence of new message failed. Reason %s.";
+            errorString="Sending header that indicates presence of new message failed. Reason %s.\n";
         }
         //send letter structure
         else if (sendRecv_all(TCPfd, (char*) newLetter, sizeof(letter_t), DIR_SEND) == ERROR_RETVAL)
         {
             errorNumber=errno;
-            errorString="Sending letter structure failed. Reason %s.";
+            errorString="Sending letter structure failed. Reason %s.\n";
         }
         // send letter text
         else if (sendRecv_all(TCPfd, newLetter->text, newLetter->textSize, DIR_SEND) == ERROR_RETVAL)
         {
             errorNumber=errno;
-            errorString="Sending letter text failed. Reason %s.";
+            errorString="Sending letter text failed. Reason %s.\n";
         }
     }else{
         pollMsg.size=0;
@@ -306,13 +332,13 @@ void * sendRecv_Mail(void * arg){
         if(sendRecv_all(TCPfd, (char*)&pollMsg, sizeof(pollMsg), DIR_SEND) == ERROR_RETVAL)
         {
             errorNumber=errno;
-            errorString="Sending header with size 0. Reason %s.";
+            errorString="Sending header with size 0. Reason %s.\n";
         }
         // recv message header
         else if (sendRecv_all(TCPfd, (char*)&pollMsg, sizeof(pollMsg), DIR_RECV) == ERROR_RETVAL)
         {
             errorNumber=errno;
-            errorString="Recieving message header from server. Reason %s.";
+            errorString="Recieving message header from server. Reason %s.\n";
         }
         // if recieved message header size is greater that 0
         // than there is new letter
@@ -328,13 +354,13 @@ void * sendRecv_Mail(void * arg){
                 {
                     free(newLetter->text);
                     errorNumber=errno;
-                    errorString="Recieving letter text from server. Reason %s.";
+                    errorString="Recieving letter text from server. Reason %s.\n";
                 }
             }
             else
             {
                 errorNumber=errno;
-                errorString="Recieving letter struct from server failed. Reason %s.";
+                errorString="Recieving letter struct from server failed. Reason %s.\n";
             }
         }
     }
@@ -368,6 +394,32 @@ static int sendRecv_all(int fd, char *buf, int len, int direction)
     len = total; // return number actually sent here
 
     return n==-1?ERROR_RETVAL:SUCCESS_RETVAL; // return -1 on failure, 0 on success
+}
+
+// Parses entered stat argument. If argument is one of Stat_cl_paramStr items
+// sets clients status.
+// If statusStr is not in Stat_cl_paramStr then sets default status
+// return: SUCCESS_RETVAL when statusStr is valid, ERROR_RETVAL on invalid arg.
+static int parseStatusStr(peerParam_t* myParams, char * statusStr){
+    int i, isNewStatSet=FALSE, retVal=ERROR_RETVAL;
+    int defaultStatus=0; // default status is "Online"
+
+    for(i=0; i < STATUS_STATES; i++){
+        if(strcmp(statusStr, Stat_cl_paramStr[i])){
+            myParams->status=(char) i;
+            isNewStatSet=TRUE;
+        }
+    }
+
+    if(!isNewStatSet){
+        myParams->status=(char) defaultStatus;
+        syslog(LOG_ERR, "Status argument %s can't be parsed. Default status %s set.\n",\
+               statusStr, Stat_cl_paramStr[defaultStatus]);
+    }else{
+        retVal=SUCCESS_RETVAL;
+    }
+
+    return retVal;
 }
 
 //closelog();
