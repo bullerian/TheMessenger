@@ -11,6 +11,8 @@
 #include <errno.h>
 #include <syslog.h>
 #include <time.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
 
 #define NAME_LEN            30
 #define SERVICE_CODE        0xFAFAFAFA
@@ -19,11 +21,9 @@
 #define ERROR_RETVAL        (-1)
 #define SUCCESS_RETVAL      0
 #define STATUS_STATES       4
-
-
-
 #define FALSE               0
 #define TRUE                (!FALSE)
+#define TEXT_MAX_LEN        251
 
 enum status_e {ONLINE, BUSY, AWAY, OFFLINE};
 enum contentType_e {PEER_LIST, LETTER, STAT, FILE_TRANS, NOP};
@@ -52,8 +52,7 @@ typedef struct {
 #define DEFAULT_SRV_PRT     1313
 #define DEFAULT_SRV_IP_STR  "127.0.0.1"
 
-char* msgIn;
-char* msgOut;
+char* mqFilePath="/tmp/theq134134341";
 
 int TCPfd;
 struct sockaddr_in serveraddr;
@@ -64,6 +63,11 @@ struct peerArray_s{
     peerParam_t* peerArr_p;
     size_t size;
 };
+
+typedef struct{
+    long mtype;
+    char text[TEXT_MAX_LEN];
+} queueMsg_t;
 
 /////////////////////////////////////////////////////////////////////////
 
@@ -141,7 +145,53 @@ int Init(int argc, char **argv){
 
 int main(int argc,char **argv)
 {
+    pthread_t uiThread, srvCommthread;
+    int mqfd, mqid;
+    key_t mqKey;
+
     Init(argc, argv);
+
+    // create messageQueue for new letters
+    // create new file in mqFilePath path
+    if(creat(mqFilePath, S_IRUSR | S_IRGRP | S_IROTH) == ERROR_RETVAL){
+        syslog(LOG_ERR, "Queue file creation failed. Error %d\n", errno);
+        exit(EXIT_FAILURE);
+    }
+    // generate IPC token
+    else if ((mqKey = ftok(mqFilePath, 33)) == ERROR_RETVAL)
+    {
+        syslog(LOG_ERR, "IPC token generation error. Error %d\n", errno);
+        exit(EXIT_FAILURE);
+    }
+    // get message queue
+    else if((mqId = msgget(mqKey, IPC_CREAT | 0666)) == ERROR_RETVAL)
+    {
+        syslog(LOG_ERR, "Queue creation failed. Error %d\n", errno);
+        exit(EXIT_FAILURE);
+    }
+
+    // use this in UI thread
+    // msgsnd(mq_id, &mymsg, sizeof(mymsg), 0);
+
+
+    // create ui thread
+    if(pthread_create(&uiThread, NULL, &uiThreadFunc, NULL) == ERROR_RETVAL){
+        syslog(LOG_ERR, "UI thread creation failed. Error %d\n", errno);
+        exit(EXIT_FAILURE);
+    }
+
+
+    while(1)
+    {
+
+
+
+
+
+
+
+    }
+
 
     return 0;
 }
@@ -290,8 +340,8 @@ void * updatePresence(void* status){
 // return:
 void * sendRecv_Mail(void * arg){
     messageHeader_t pollMsg;
-    letter_t* newLetter;
-    int isSend=newLetter->textSize ? 1 : 0;
+    letter_t* newLetter=(letter_t *) arg;
+    int isSend=0;
     unsigned int errorNumber=0;
     char* errorString;
 
@@ -300,10 +350,11 @@ void * sendRecv_Mail(void * arg){
 
     connToSrv();
 
-    // if func was called with non NULL arg then send message
-    // else just poll server for new mail
+    // if newLetter->textSize > 0 then there is new letter to send
+    isSend=newLetter->textSize ? 1 : 0;
+
+    // send or recv new letter
     if (isSend){
-        newLetter=(letter_t *) arg;
         pollMsg.size=sizeof(letter_t);
 
         // send header that indicates presence of new message
@@ -313,23 +364,31 @@ void * sendRecv_Mail(void * arg){
             errorString="Sending header that indicates presence of new message failed. Reason %s.\n";
         }
         //send letter structure
-        else if (sendRecv_all(TCPfd, (char*) newLetter, sizeof(letter_t), DIR_SEND) == ERROR_RETVAL)
+        else if (sendRecv_all(TCPfd, (char*) newLetter, sizeof(letter_t),\
+                              DIR_SEND) == ERROR_RETVAL)
         {
             errorNumber=errno;
             errorString="Sending letter structure failed. Reason %s.\n";
         }
         // send letter text
-        else if (sendRecv_all(TCPfd, newLetter->text, newLetter->textSize, DIR_SEND) == ERROR_RETVAL)
+        else if (sendRecv_all(TCPfd, newLetter->text, newLetter->textSize,\
+                              DIR_SEND) == ERROR_RETVAL)
         {
             errorNumber=errno;
             errorString="Sending letter text failed. Reason %s.\n";
+        }
+        // letter was succesfuly send. memory can be freed
+        else
+        {
+            free(newLetter->text);
         }
     }else{
         pollMsg.size=0;
 
         // send header with size 0
         // this indicates that clien is polling for new letters
-        if(sendRecv_all(TCPfd, (char*)&pollMsg, sizeof(pollMsg), DIR_SEND) == ERROR_RETVAL)
+        if(sendRecv_all(TCPfd, (char*)&pollMsg, sizeof(pollMsg),\
+                        DIR_SEND) == ERROR_RETVAL)
         {
             errorNumber=errno;
             errorString="Sending header with size 0. Reason %s.\n";
@@ -395,6 +454,7 @@ static int sendRecv_all(int fd, char *buf, int len, int direction)
 
     return n==-1?ERROR_RETVAL:SUCCESS_RETVAL; // return -1 on failure, 0 on success
 }
+
 
 // Parses entered stat argument. If argument is one of Stat_cl_paramStr items
 // sets clients status.
