@@ -1,84 +1,44 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <unistd.h>
-#include <string.h>
-#include <ifaddrs.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <errno.h>
-#include <syslog.h>
-#include <time.h>
-#include <sys/ipc.h>
-#include <sys/msg.h>
+#include "includes/main.h"
 
-#define NAME_LEN            30
-#define SERVICE_CODE        0xFAFAFAFA
-#define DIR_SEND            0
-#define DIR_RECV            1
-#define ERROR_RETVAL        (-1)
-#define SUCCESS_RETVAL      0
-#define STATUS_STATES       4
-#define FALSE               0
-#define TRUE                (!FALSE)
-#define TEXT_MAX_LEN        251
-
-enum status_e {ONLINE, BUSY, AWAY, OFFLINE};
-enum contentType_e {PEER_LIST, LETTER, STAT, FILE_TRANS, NOP};
-
-typedef struct peerParam{
-    char name[NAME_LEN];
-    enum status_e status;
-} peerParam_t;
-
-typedef struct {
-    uint32_t serviceCode;
-    int8_t type;
-    uint32_t size;
-} messageHeader_t;
-
-typedef struct {
-    char from[NAME_LEN];
-    uint32_t textSize;
-    char* text;
-} letter_t;
-
-//////////// Client Variables///////////////////////////////////////////
-
+//////////// Client DEFINEs/////////////////////////////////////////////
 #define CONN_RETR_COUNT     2
 #define CONN_RETR_DELAY_MS  50
 #define DEFAULT_SRV_PRT     1313
 #define DEFAULT_SRV_IP_STR  "127.0.0.1"
-
-char* mqFilePath="/tmp/theq134134341";
-
-int TCPfd;
-struct sockaddr_in serveraddr;
-peerParam_t myParams;
-char* StatusStrings[]={"Online", "Busy", "Away", "Offline"};
-char* Stat_cl_paramStr[]={"on", "bu", "aw", "of"};
-struct peerArray_s{
-    peerParam_t* peerArr_p;
-    size_t size;
-};
-
-typedef struct{
-    long mtype;
-    char text[TEXT_MAX_LEN];
-} queueMsg_t;
-
+#define ERROR_RETVAL        (-1)
+#define SUCCESS_RETVAL      0
 /////////////////////////////////////////////////////////////////////////
-
+//////////////////// Client prototypes //////////////////////////////////
 static int parseAddrStr(struct sockaddr_in* socketAddress, char *addrString);
 static int parseStatusStr(peerParam_t* myParams, char * statusStr);
 static int sendRecv_all(int fd, char *buf, int len, int direction);
 int disconFromSev(void);
 int connToSrv(void);
+void * sendRecv_File(void * fileT);
+void * updateStatus(void* status);
+void * sendRecv_Mail(void * arg);
+void * getpeerArrMsg(void* arg);
+/////////////////////////////////////////////////////////////////////////
+//////////// Client Globals /////////////////////////////////////////////
+int TCPfd;
+struct sockaddr_in serveraddr;
+peerParam_t myParams;
+char* StatusStrings[]={"Online", "Busy", "Away", "Offline"};
+char* Stat_cl_paramStr[]={"on", "bu", "aw", "of"};
 
-
+struct peerArray_s{
+    peerParam_t* peerArr_p;
+    size_t size;
+};
+/////////////////////////////////////////////////////////////////////////
 //////////////////////////PROGRAM////////////////////////////////////////
+
+void Exit_handler(int signum){
+    close(TCPfd);
+    syslog(LOG_DEBUG, "Terminated by signal %d\n", signum);
+    closelog();
+    exit(EXIT_FAILURE);
+}
 
 int Init(int argc, char **argv){
     int opt;
@@ -126,7 +86,7 @@ int Init(int argc, char **argv){
     }
 
     // copy entered name to parametres structure
-    strncpy(myParams.name, argv[optind], NAME_LEN-1);
+    strncpy((char *) myParams.name, argv[optind], NAME_LEN-1);
 
     //parse address and status
     if ((parseAddrStr(&serveraddr, socketStr) == ERROR_RETVAL) ||\
@@ -140,60 +100,48 @@ int Init(int argc, char **argv){
         exit(EXIT_FAILURE);
     }
 
+    signal(SIGINT, &Exit_handler);
+
     return SUCCESS_RETVAL;
 }
 
 int main(int argc,char **argv)
 {
-    pthread_t uiThread, srvCommthread;
-    int mqfd, mqid;
-    key_t mqKey;
+    pthread_t uiThread, srvCmdThread;
+    struct peerArray_s peersArray;
+    letter_t letter;
+    void * threadRetval;
+
 
     Init(argc, argv);
 
-    // create messageQueue for new letters
-    // create new file in mqFilePath path
-    if(creat(mqFilePath, S_IRUSR | S_IRGRP | S_IROTH) == ERROR_RETVAL){
-        syslog(LOG_ERR, "Queue file creation failed. Error %d\n", errno);
-        exit(EXIT_FAILURE);
-    }
-    // generate IPC token
-    else if ((mqKey = ftok(mqFilePath, 33)) == ERROR_RETVAL)
-    {
-        syslog(LOG_ERR, "IPC token generation error. Error %d\n", errno);
-        exit(EXIT_FAILURE);
-    }
-    // get message queue
-    else if((mqId = msgget(mqKey, IPC_CREAT | 0666)) == ERROR_RETVAL)
-    {
-        syslog(LOG_ERR, "Queue creation failed. Error %d\n", errno);
-        exit(EXIT_FAILURE);
-    }
-
-    // use this in UI thread
-    // msgsnd(mq_id, &mymsg, sizeof(mymsg), 0);
-
-
     // create ui thread
+    /*
     if(pthread_create(&uiThread, NULL, &uiThreadFunc, NULL) == ERROR_RETVAL){
         syslog(LOG_ERR, "UI thread creation failed. Error %d\n", errno);
         exit(EXIT_FAILURE);
     }
+    */
 
+    updateStatus(&myParams);
+    getpeerArrMsg(&peersArray);
 
     while(1)
     {
+        // create mail check thread
+        if(pthread_create(&srvCmdThread, NULL, &sendRecv_Mail, &letter) == ERROR_RETVAL){
+            syslog(LOG_ERR, "UI thread creation failed. Error %d\n", errno);
+            exit(EXIT_FAILURE);
+        }
 
-
-
-
+        pthread_tryjoin_np(srvCmdThread, &threadRetval);
 
 
 
     }
 
 
-    return 0;
+    exit(EXIT_SUCCESS);
 }
 
 static int parseAddrStr(struct sockaddr_in* socketAddress, char* addrString){
@@ -277,7 +225,7 @@ void * getpeerArrMsg(void* arg){
         errorNumber=errno;
         errorString="Request to server for peerArray failed. Error %d\n";
     }
-    // recieve reply from server with peerArr message header
+    // recieve reply from server with message header
     else if(sendRecv_all(TCPfd, (char*)&peerArrMsg, sizeof(peerArrMsg), DIR_RECV) == ERROR_RETVAL)
     {
         errorNumber=errno;
@@ -308,10 +256,11 @@ void * getpeerArrMsg(void* arg){
     return (void*) newPeerArray;
 }
 
-// sends peerStatus to server
-void * updatePresence(void* status){
+// send peerStatus to server
+void * updateStatus(void* status){
     messageHeader_t statusMsg;
     peerParam_t* newStatus=(peerParam_t*) status;
+    void * retVal = status;
 
     // fill header struct
     statusMsg.serviceCode=SERVICE_CODE;
@@ -325,13 +274,12 @@ void * updatePresence(void* status){
        !sendRecv_all(TCPfd, (char*)&newStatus, sizeof(peerParam_t), DIR_SEND))
     {
         syslog(LOG_ERR, "Send message of type STATus failed. Error %d\n", errno);
-        disconFromSev();
-        return NULL;
+        retVal = NULL;
     }
 
     disconFromSev();
 
-    return (void*) status;
+    return retVal;
 }
 
 
@@ -353,29 +301,30 @@ void * sendRecv_Mail(void * arg){
     // if newLetter->textSize > 0 then there is new letter to send
     isSend=newLetter->textSize ? 1 : 0;
 
-    // send or recv new letter
+
     if (isSend){
+        // send letter
         pollMsg.size=sizeof(letter_t);
 
         // send header that indicates presence of new message
         if(sendRecv_all(TCPfd, (char*)&pollMsg, sizeof(pollMsg), DIR_SEND) == ERROR_RETVAL)
         {
             errorNumber=errno;
-            errorString="Sending header that indicates presence of new message failed. Reason %s.\n";
+            errorString="Sending header that indicates presence of new message failed. Reason %d.\n";
         }
         //send letter structure
         else if (sendRecv_all(TCPfd, (char*) newLetter, sizeof(letter_t),\
                               DIR_SEND) == ERROR_RETVAL)
         {
             errorNumber=errno;
-            errorString="Sending letter structure failed. Reason %s.\n";
+            errorString="Sending letter structure failed. Reason %d.\n";
         }
         // send letter text
         else if (sendRecv_all(TCPfd, newLetter->text, newLetter->textSize,\
                               DIR_SEND) == ERROR_RETVAL)
         {
             errorNumber=errno;
-            errorString="Sending letter text failed. Reason %s.\n";
+            errorString="Sending letter text failed. Reason %d.\n";
         }
         // letter was succesfuly send. memory can be freed
         else
@@ -383,6 +332,7 @@ void * sendRecv_Mail(void * arg){
             free(newLetter->text);
         }
     }else{
+        // check for new incomming letters
         pollMsg.size=0;
 
         // send header with size 0
@@ -391,13 +341,13 @@ void * sendRecv_Mail(void * arg){
                         DIR_SEND) == ERROR_RETVAL)
         {
             errorNumber=errno;
-            errorString="Sending header with size 0. Reason %s.\n";
+            errorString="Sending header with size 0. Reason %d.\n";
         }
         // recv message header
         else if (sendRecv_all(TCPfd, (char*)&pollMsg, sizeof(pollMsg), DIR_RECV) == ERROR_RETVAL)
         {
             errorNumber=errno;
-            errorString="Recieving message header from server. Reason %s.\n";
+            errorString="Recieving message header from server. Reason %d.\n";
         }
         // if recieved message header size is greater that 0
         // than there is new letter
@@ -413,19 +363,20 @@ void * sendRecv_Mail(void * arg){
                 {
                     free(newLetter->text);
                     errorNumber=errno;
-                    errorString="Recieving letter text from server. Reason %s.\n";
+                    errorString="Recieving letter text from server. Reason %d.\n";
                 }
             }
             else
             {
                 errorNumber=errno;
-                errorString="Recieving letter struct from server failed. Reason %s.\n";
+                errorString="Receiving letter struct from server failed. Reason %d.\n";
             }
         }
     }
 
-    if(!errorNumber){
-        disconFromSev();
+    disconFromSev();
+
+    if(errorNumber){
         syslog(LOG_ERR, errorString, errorNumber);
         return NULL;
     }
@@ -433,6 +384,9 @@ void * sendRecv_Mail(void * arg){
     return (void*) arg;
 }
 
+void * sendRecv_File(void * fileT){
+    return NULL;
+}
 
 // send or recieve the whole buf
 // direction -- DIR_SEND or DIR_RECV
@@ -481,7 +435,5 @@ static int parseStatusStr(peerParam_t* myParams, char * statusStr){
 
     return retVal;
 }
-
-//closelog();
 
 
