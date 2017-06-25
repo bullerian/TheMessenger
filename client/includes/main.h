@@ -25,15 +25,20 @@
 #define STATUS_STATES       4
 #define FALSE               0
 #define TRUE                (!FALSE)
-#define TEXT_MAX_LEN        251
+#define TEXT_MAX_LEN        250
 
 enum status_e {ONLINE, BUSY, AWAY, OFFLINE};
 enum contentType_e {PEER_LIST, LETTER, STAT, FILE_TRANS, NOP};
 
-typedef struct peerParam{
-    uint8_t name[NAME_LEN];
+typedef struct {
+    char name[NAME_LEN+1];
     uint8_t status;
 } peerParam_t;
+
+typedef struct {
+    uint32_t count;
+    peerParam_t* peerArr;
+}peerArray_t;
 
 typedef struct {
     uint32_t serviceCode;
@@ -42,9 +47,9 @@ typedef struct {
 } messageHeader_t;
 
 typedef struct {
-    uint8_t from[NAME_LEN];
+    char from[NAME_LEN+1];
     uint32_t textSize;
-    uint8_t* text;
+    char* text;
 } letter_t;
 
 typedef struct {
