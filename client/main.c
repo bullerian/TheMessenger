@@ -35,7 +35,7 @@ int ResultQueue_id;
 
 enum qmsgtype {UI_ACTION, IN_MESSAGE, PEERS};
 struct msg{
-    enum qmsgtype type;
+    enum qmsgtype mtype;
     void * data;
 };
 
@@ -140,23 +140,19 @@ int Init(int argc, char **argv){
 int main(int argc,char **argv)
 {
     pthread_t uiThread, srvCmdThread;
-    letter_t letter;
+    letter_t inLetter, outLetter;
+
     void * threadRetval;
     peerArray_t peersOnline;
 
     Init(argc, argv);
-
-
-    getpeerArrMsg(&peersOnline);
-
-    while(1);
 
     // create message queue
 
 
     int received;
     struct msg sentmsg, rcvmsg;
-    sentmsg.type = 2;
+    sentmsg.mtype = 2;
     sentmsg.data = "This is text";
 
     msgsnd(ResultQueue_id, &sentmsg, sizeof(sentmsg), 0);
@@ -191,6 +187,30 @@ int main(int argc,char **argv)
     exit(EXIT_SUCCESS);
 }
 
+void printPeerList(peerArray_t* peAr){
+    unsigned int i;
+
+    printf("Total peers online: %d\n", newPeerArray->count);
+
+    for(i=0; i < newPeerArray->count; i++){
+        printf("\tName: %s\t\tStatus: %d\n",\
+               (newPeerArray->peerArr + i)->name,\
+               (newPeerArray->peerArr + i)->status);
+        fflush(stdout);
+    }
+
+    free(peAr->peerArr);
+}
+
+void printLetter(letter_t* letter){
+
+    printf("%s:\n", letter->from);
+    printf("%s\n", letter->text);
+    fflush(stdout);
+
+    free(letter->text);
+}
+
 static int
 parseAddrStr(struct sockaddr_in* socketAddress, char* addrString){
     int port;
@@ -220,23 +240,19 @@ parseAddrStr(struct sockaddr_in* socketAddress, char* addrString){
     return SUCCESS_RETVAL;
 }
 
-
 // creates connection to server
 // makes CONN_RETR_COUNT connection attempts with delay CONN_RETR_DELAY_MS
 int connToSrv(void){
     unsigned int retryCount=CONN_RETR_COUNT;
     unsigned int retryDelayUs=CONN_RETR_DELAY_MS * 100;
-    int connectVal=0;
 
     while(retryCount--){
-        if ((connectVal = connect(TCPfd, (struct sockaddr *) &Serveraddr,\
-                    sizeof(Serveraddr))) == SUCCESS_RETVAL){
+        if (connect(TCPfd, (struct sockaddr *) &Serveraddr,\
+                    sizeof(Serveraddr)) == SUCCESS_RETVAL){
             return SUCCESS_RETVAL;
         }
-
         syslog(LOG_ERR, "Connection to server failed. Retry count %d. Error: %s",\
                retryCount, strerror(errno));
-
         usleep(retryDelayUs);
     }
 
@@ -259,6 +275,7 @@ int disconFromSev(void){
 // return: NULL on fail, struct peerArray_s pointer on success
 // Warning: newPeerArray->peerArr_p must be freed
 void * getpeerArrMsg(void* arg){
+    peerArray_t peerArr;
     peerArray_t * newPeerArray=(peerArray_t *) arg;
     messageHeader_t peerArrMsg;
     unsigned int errorNumber=0;
@@ -312,14 +329,14 @@ void * getpeerArrMsg(void* arg){
 #endif
     }
 
-
-
     disconFromSev();
 
     if(errorNumber != 0){
         syslog(LOG_ERR, errorString, errorNumber);
         return NULL;
     }
+
+    //msgsnd(ResultQueue_id, &sentmsg, sizeof(sentmsg), 0);
 
     return (void*) newPeerArray;
 }
@@ -352,7 +369,6 @@ void * updateStatus(void* status){
 
     return retVal;
 }
-
 
 // call this func to ask server for pressence of new messages
 // if passed param of type letter_t has newLetter->textSize > 0
@@ -479,7 +495,6 @@ static int sendRecv_all(int fd, char *buf, int len, int direction)
 
     return n==-1?ERROR_RETVAL:SUCCESS_RETVAL; // return -1 on failure, 0 on success
 }
-
 
 // Parses entered stat argument. If argument is one of Stat_cl_paramStr items
 // sets clients status.
