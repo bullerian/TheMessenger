@@ -20,10 +20,13 @@ static int parseStatusStr(peerParam_t* myParams, char * statusStr);
 static int sendRecv_all(int fd, char *buf, int len, int direction);
 int disconFromSev(void);
 int connToSrv(void);
-void * sendRecv_File(void * fileT);
+void * sendRecv_File(void * none);
 void * updateStatus(void* none);
 void * sendRecv_Mail(void * none);
 void * getpeerArrMsg(void* none);
+void printPeerList(peerArray_t* peAr);
+void printLetter(letter_t* letter);
+
 /////////////////////////////////////////////////////////////////////////
 //////////// Client Globals /////////////////////////////////////////////
 int TCPfd;
@@ -33,7 +36,7 @@ char* StatusStrings[]={"Online", "Busy", "Away", "Offline"};
 char* Stat_cl_paramStr[]={"on", "bu", "aw", "of"};
 int ResultQ_id, CommandQ_id;
 
-enum qmsgtype {UI_ACTION, NEW_LETTER, PEERS, STATUS};
+enum qmsgtype {UI_ACTION, NEW_LETTER, PEERS, STATUS, SW_OFF};
 struct msg{
     enum qmsgtype mtype;
     void * payload;
@@ -139,27 +142,17 @@ int Init(int argc, char **argv){
 
 int main(int argc,char **argv)
 {
-    pthread_t uiThread, srvCmdThread;
+    //pthread_t uiThread;
+    pthread_t srvCmdThread;
     pthread_attr_t detachedAttr;
 
     pthread_attr_init(&detachedAttr);
     pthread_attr_setdetachstate(&detachedAttr, PTHREAD_CREATE_DETACHED);
 
-
-    void * threadRetval;
-    peerArray_t peersOnline;
-
     Init(argc, argv);
-
-    // create message queue
-
-
-    int received;
     struct msg res_msg, comm_msg;
-    sentmsg.mtype = 2;
-    sentmsg.payload = "This is text";
 
-    msgsnd(ResultQ_id, &sentmsg, sizeof(sentmsg), 0);
+    //msgsnd(ResultQ_id, &sentmsg, sizeof(sentmsg), 0);
 
     // create ui thread
     // thread can send commands to CommandQ
@@ -324,6 +317,8 @@ void * getpeerArrMsg(void* none){
     messageHeader_t peerArrMsg;
     unsigned int errorNumber=0;
     char* errorString;
+    //supress gcc warnings
+    (void)none;
 
     // allocate memory for peerArray_t
     if(!(newPeerArray=malloc(sizeof(peerArray_t)))){
@@ -388,7 +383,7 @@ void * getpeerArrMsg(void* none){
     qMsg.payload=newPeerArray;
     if(msgsnd(ResultQ_id, &qMsg, sizeof(qMsg), 0) == ERROR_RETVAL){
         free(newPeerArray);
-        syslog(LOG_ERR, "Failed to send peerArr message to result queue", errno);
+        syslog(LOG_ERR, "Failed to send peerArr message to result queue. Error %d", errno);
     }
 
     pthread_exit(NULL);
@@ -448,6 +443,8 @@ void * sendRecv_Mail(void * none){
     int dirSndRcv=DIR_RECV;
     unsigned int errorNumber=0;
     char* errorString;
+    //supress gcc warnings
+    (void)none;
 
     pollMsg.serviceCode=SERVICE_CODE;
     pollMsg.type=LETTER;
@@ -559,7 +556,10 @@ void * sendRecv_Mail(void * none){
     pthread_exit(NULL);
 }
 
-void * sendRecv_File(void * fileT){
+void * sendRecv_File(void * none){
+    //supress gcc warnings
+    (void)none;
+
     return NULL;
 }
 
