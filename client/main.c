@@ -10,23 +10,11 @@
 #define ERROR_RETVAL        (-1)
 #define SUCCESS_RETVAL      0
 #define FTOK_PATH           "/tmp"
-#define PROJ_ID             13
+#define PROJ_ID_1           13
+#define PROJ_ID_2           31
+
 
 #define                     DBG
-/////////////////////////////////////////////////////////////////////////
-//////////////////// Client prototypes //////////////////////////////////
-static int parseAddrStr(struct sockaddr_in* socketAddress, char *addrString);
-static int parseStatusStr(peerParam_t* myParams, char * statusStr);
-static int sendRecv_all(int fd, char *buf, int len, int direction);
-int disconFromSev(void);
-int connToSrv(void);
-void * sendRecv_File(void * none);
-void * updateStatus(void* none);
-void * sendRecv_Mail(void * none);
-void * getpeerArrMsg(void* none);
-void printPeerList(peerArray_t* peAr);
-void printLetter(letter_t* letter);
-
 /////////////////////////////////////////////////////////////////////////
 //////////// Client Globals /////////////////////////////////////////////
 int TCPfd;
@@ -41,7 +29,25 @@ struct msg{
     enum qmsgtype mtype;
     void * payload;
 };
-
+/////////////////////////////////////////////////////////////////////////
+//////////////////// Client prototypes //////////////////////////////////
+// init routine func
+static int parseAddrStr(struct sockaddr_in* socketAddress, char *addrString);
+static int parseStatusStr(peerParam_t* myParams, char * statusStr);
+static int sendRecv_all(int fd, char *buf, int len, int direction);
+static int createQ(int proj_id, char * ftok_path, char * descr);
+// thread spawner
+int addCommand(struct msg* command);
+// server communication thread func
+void * sendRecv_File(void * none);
+void * updateStatus(void* none);
+void * sendRecv_Mail(void * none);
+void * getpeerArrMsg(void* none);
+int disconFromServ(void);
+int connToSrv(void);
+// stubs
+void printPeerList(peerArray_t* peAr);
+void printLetter(letter_t* letter);
 /////////////////////////////////////////////////////////////////////////
 //////////////////////////PROGRAM////////////////////////////////////////
 
@@ -53,10 +59,10 @@ void Exit_handler(int signum){
 }
 
 int Init(int argc, char **argv){
-    int opt;
+    int opt, i;
     char * socketStr=NULL;
     char * statusStr=NULL;
-    key_t resultsQ;
+
 
     // clear socketAddress structure
     // fill it with default data
@@ -71,7 +77,7 @@ int Init(int argc, char **argv){
 
     // Usage nickname [-a serverIP:port] [-s status]
     // parsing command-line arguments
-    while ((opt = getopt(argc, argv, "a:s:")) != -1) {
+    while ((opt = getopt(argc, argv, "a:s:h")) != -1) {
         switch (opt) {
         case 'a':
             socketStr=optarg;
@@ -79,6 +85,17 @@ int Init(int argc, char **argv){
         case 's':
             statusStr=optarg;
             break;
+        case 'h':
+            printf("Usage: nickname [-a serverIP:port] [-s status]\n"
+                   "Nickname will be truncated to 30 characters max\n"
+                   "Default socket %s:%d, default status %s\n"
+                   "The 'status' can be one of: ",\
+                   DEFAULT_SRV_IP_STR, DEFAULT_SRV_PRT, StatusStrings[0]);
+            for (i=0; i < STATUS_STATES; i++){
+                printf("\n\t'%s' for %s\n", Stat_cl_paramStr[i], StatusStrings[i]);
+            }
+
+            exit(EXIT_SUCCESS);
         case '?':
           if (optopt == 'a')
           {
@@ -120,17 +137,15 @@ int Init(int argc, char **argv){
 
     // connect to socket
     if ((TCPfd=socket(AF_INET, SOCK_STREAM, 0)) < 0){
-        syslog(LOG_ERR, "socket creation error. Error %d\n", errno);
+        syslog(LOG_ERR, "socket creation error. Error: %s", strerror(errno));
         exit(EXIT_FAILURE);
     }
 
-    // create ipc queue
-    if ((resultsQ = ftok(FTOK_PATH, PROJ_ID)) == ERROR_RETVAL){
-        syslog(LOG_ERR, "Queue tocken generation failed. Error %d\n", errno);
-        exit(EXIT_FAILURE);
-    }
-    else if((ResultQ_id = msgget(resultsQ, IPC_CREAT | 0666)) == ERROR_RETVAL){
-        syslog(LOG_ERR, "Queue creation failed. Error %d\n", errno);
+    // create ipc result and command queues
+    if((ResultQ_id=createQ(PROJ_ID_1, FTOK_PATH, "Result")) == ERROR_RETVAL ||\
+        (CommandQ_id=createQ(PROJ_ID_2, FTOK_PATH, "Command"))== ERROR_RETVAL)
+    {
+        syslog(LOG_ERR, "Create ipc result or command queues failed.");
         exit(EXIT_FAILURE);
     }
 
@@ -143,19 +158,17 @@ int Init(int argc, char **argv){
 int main(int argc,char **argv)
 {
     //pthread_t uiThread;
-    pthread_t srvCmdThread;
     pthread_attr_t detachedAttr;
 
     pthread_attr_init(&detachedAttr);
     pthread_attr_setdetachstate(&detachedAttr, PTHREAD_CREATE_DETACHED);
 
     Init(argc, argv);
-    struct msg res_msg, comm_msg;
-
-    //msgsnd(ResultQ_id, &sentmsg, sizeof(sentmsg), 0);
+    struct msg tmp_msg;
 
     // create ui thread
-    // thread can send commands to CommandQ
+    // thread can send commands with addCommand(struct msg* qm)
+    // UI sposed to be based on NCURSES pseudo graphics lib
     /*
     if(pthread_create(&uiThread, NULL, &uiThreadFunc, NULL) == ERROR_RETVAL){
         syslog(LOG_ERR, "UI thread creation failed. Error %d\n", errno);
@@ -163,63 +176,116 @@ int main(int argc,char **argv)
     }
     */
 
-    // send status to server
-    if(pthread_create(&srvCmdThread, &detachedAttr, &updateStatus, NULL) == ERROR_RETVAL){
-        syslog(LOG_ERR, "Update status thread creation failed. Error %d\n", errno);
-        exit(EXIT_FAILURE);
-    }
+    // update status
+    tmp_msg.mtype=STATUS;
+    tmp_msg.payload=&myParams;
+    addCommand(&tmp_msg);
 
-    // getPeer array
-    if(pthread_create(&srvCmdThread, &detachedAttr, &getpeerArrMsg, NULL) == ERROR_RETVAL){
-        syslog(LOG_ERR, "Update status thread creation failed. Error %d\n", errno);
-        exit(EXIT_FAILURE);
-    }
+    tmp_msg.mtype=PEERS;
+    tmp_msg.payload=NULL;
+    addCommand(&tmp_msg);
 
 
+    // the program loop
     while(1)
     {
-        if(msgrcv(ResultQ_id, &res_msg, sizeof(res_msg), 0, 0))
+        if(msgrcv(ResultQ_id, &tmp_msg, sizeof(tmp_msg), 0, 0))
         {
-            switch (res_msg.mtype) {
+            switch (tmp_msg.mtype) {
             case NEW_LETTER:
-                printLetter((letter_t*) res_msg.payload);
+                printLetter((letter_t*) tmp_msg.payload);
                 break;
             case PEERS:
-                printPeerList((peerArray_t*) res_msg.payload);
+                printPeerList((peerArray_t*) tmp_msg.payload);
                 break;
             case SW_OFF:
                 printf("Shutting down!\n");
                 raise(SIGINT);
             default:
-                printf("Type of result %d\n", res_msg.mtype);
+                printf("Type of result %d\n", tmp_msg.mtype);
                 break;
             }
         }
 
-        if(msgrcv(CommandQ_id, &comm_msg, sizeof(comm_msg), 0, 0)){
-            switch (comm_msg.mtype) {
-            case NEW_LETTER:
-                // getPeer array
-                if(pthread_create(&srvCmdThread, &detachedAttr, &getpeerArrMsg, NULL) == ERROR_RETVAL){
-                    syslog(LOG_ERR, "Update status thread creation failed. Error %d\n", errno);
-                    exit(EXIT_FAILURE);
-                }
-                break;
-            case PEERS:
-
-                break;
-            case STATUS:
-
-                break;
-            default:
-                printf("Type of command %d\n", res_msg.mtype);
-                break;
-            }
-        }
+        // the UI thread calls commands with addCommand(struct msg* qm)
 
     }
 
     exit(EXIT_SUCCESS);
+}
+
+
+////
+/// \brief Create IPC queue
+/// \param proj_id  Random number
+/// \param Path     Path to some existing file in the system
+/// \param descr    Short text description of queue (for dbg purposes)
+/// \return         New Queue id on success, ERROR_RETVAL of failure
+///
+static int
+createQ(int proj_id, char * ftok_path, char * descr){
+    key_t tmp_key;
+    int retVal=ERROR_RETVAL;
+
+    // create ipc queue
+    if ((tmp_key = ftok(ftok_path, proj_id)) == ERROR_RETVAL){
+        syslog(LOG_ERR, "%s queue tocken generation failed. Error %d\n", descr, errno);
+    }
+    else if((retVal = msgget(tmp_key, IPC_CREAT | 0666)) == ERROR_RETVAL){
+        syslog(LOG_ERR, "%s queue creation failed. Error %d\n", descr, errno);
+    }
+
+    return retVal;
+}
+
+int addCommand(struct msg* command){
+    pthread_t tmp_th;
+    pthread_attr_t detachedAttr;
+    int retVal=SUCCESS_RETVAL;
+
+    pthread_attr_init(&detachedAttr);
+    pthread_attr_setdetachstate(&detachedAttr, PTHREAD_CREATE_DETACHED);
+
+    if(!command)
+    {
+        syslog(LOG_ERR, "Null queue command pointer. Error %d\n", errno);
+        //return from func
+    }
+    else if(msgsnd(CommandQ_id, command, sizeof(struct msg), 0) == ERROR_RETVAL)
+    {
+        syslog(LOG_ERR, "Adding command to commQ failed. Error %d\n", errno);
+        retVal=ERROR_RETVAL;
+    }
+    // the command was succesfuly added. new thread may be started
+    else
+    {
+        switch (command->mtype) {
+            case NEW_LETTER:
+                if(pthread_create(&tmp_th, &detachedAttr, &sendRecv_Mail, NULL) == ERROR_RETVAL){
+                    syslog(LOG_ERR, "Mail check thread creation failed. Error %d\n", errno);
+                    retVal=ERROR_RETVAL;
+                }
+                break;
+            case PEERS:
+                if(pthread_create(&tmp_th, &detachedAttr, &getpeerArrMsg, NULL) == ERROR_RETVAL){
+                    syslog(LOG_ERR, "GetPeerArray thread creation failed. Error %d\n", errno);
+                    retVal=ERROR_RETVAL;
+                }
+                break;
+            case STATUS:
+                if(pthread_create(&tmp_th, &detachedAttr, &updateStatus, NULL) == ERROR_RETVAL){
+                    syslog(LOG_ERR, "UpdateStatus thread creation failed. Error %d\n", errno);
+                    retVal=ERROR_RETVAL;
+                }
+                break;
+            default:
+                syslog(LOG_ERR, "Unknown comm queue msg type %d.", command->mtype);
+                retVal=ERROR_RETVAL;
+                break;
+        }
+    }
+
+    return retVal;
 }
 
 void printPeerList(peerArray_t* peAr){
@@ -228,9 +294,9 @@ void printPeerList(peerArray_t* peAr){
     printf("Total peers online: %d\n", peAr->count);
 
     for(i=0; i < peAr->count; i++){
-        printf("\tName: %s\t\tStatus: %d\n",\
+        printf("\tName: %s\t\tStatus: %s\n",\
                (peAr->peerArr + i)->name,\
-               (peAr->peerArr + i)->status);
+               StatusStrings[(peAr->peerArr + i)->status]);
         fflush(stdout);
     }
 
@@ -296,7 +362,7 @@ int connToSrv(void){
     return ERROR_RETVAL;
 }
 
-int disconFromSev(void){
+int disconFromServ(void){
     int retVal=SUCCESS_RETVAL;
 
     if (close(TCPfd) == ERROR_RETVAL){
@@ -371,7 +437,7 @@ void * getpeerArrMsg(void* none){
 #endif
     }
 
-    disconFromSev();
+    disconFromServ();
 
     if(errorNumber != 0){
         syslog(LOG_ERR, errorString, errorNumber);
@@ -425,9 +491,10 @@ void * updateStatus(void* none){
         syslog(LOG_ERR, "Send message of type STATus failed. Error %s", strerror(errno));
     }
 
-    disconFromSev();
+    disconFromServ();
 
-    free(newStatus);
+    //peerParam_t* newStatus is pointing to global var.;
+    //free(newStatus);
 
     pthread_exit(NULL);
 }
@@ -543,7 +610,7 @@ void * sendRecv_Mail(void * none){
         }
     }
 
-    disconFromSev();
+    disconFromServ();
 
     if(errorNumber){
         syslog(LOG_ERR, errorString, errorNumber);
