@@ -12,9 +12,6 @@
 #define FTOK_PATH           "/tmp"
 #define PROJ_ID_1           13
 #define PROJ_ID_2           31
-
-
-#define                     DBG
 /////////////////////////////////////////////////////////////////////////
 //////////// Client Globals /////////////////////////////////////////////
 int TCPfd;
@@ -158,11 +155,7 @@ int Init(int argc, char **argv){
 int main(int argc,char **argv)
 {
     //pthread_t uiThread;
-    pthread_attr_t detachedAttr;
-
-    pthread_attr_init(&detachedAttr);
-    pthread_attr_setdetachstate(&detachedAttr, PTHREAD_CREATE_DETACHED);
-
+   
     Init(argc, argv);
     struct msg tmp_msg;
 
@@ -185,6 +178,7 @@ int main(int argc,char **argv)
     tmp_msg.payload=NULL;
     addCommand(&tmp_msg);
 
+   
 
     // the program loop
     while(1)
@@ -214,6 +208,7 @@ int main(int argc,char **argv)
     exit(EXIT_SUCCESS);
 }
 
+   
 
 ////
 /// \brief Create IPC queue
