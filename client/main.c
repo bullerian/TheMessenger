@@ -20,6 +20,7 @@ static int parseStatusStr(peerParam_t* myParams, char * statusStr);
 static int sendRecv_all(int fd, char *buf, int len, int direction);
 int disconFromSev(void);
 int connToSrv(void);
+<<<<<<< HEAD
 void * sendRecv_File(void * none);
 void * updateStatus(void* none);
 void * sendRecv_Mail(void * none);
@@ -27,6 +28,12 @@ void * getpeerArrMsg(void* none);
 void printPeerList(peerArray_t* peAr);
 void printLetter(letter_t* letter);
 
+=======
+void * sendRecv_File(void * fileT);
+void * updateStatus(void* status);
+void * sendRecv_Mail(void * arg);
+void * getpeerArrMsg(void* arg);
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
 /////////////////////////////////////////////////////////////////////////
 //////////// Client Globals /////////////////////////////////////////////
 int TCPfd;
@@ -34,12 +41,21 @@ struct sockaddr_in Serveraddr;
 peerParam_t myParams;
 char* StatusStrings[]={"Online", "Busy", "Away", "Offline"};
 char* Stat_cl_paramStr[]={"on", "bu", "aw", "of"};
+<<<<<<< HEAD
 int ResultQ_id, CommandQ_id;
 
 enum qmsgtype {UI_ACTION, NEW_LETTER, PEERS, STATUS, SW_OFF};
 struct msg{
     enum qmsgtype mtype;
     void * payload;
+=======
+int ResultQueue_id;
+
+enum qmsgtype {UI_ACTION, IN_MESSAGE, PEERS};
+struct msg{
+    enum qmsgtype type;
+    void * data;
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
 };
 
 /////////////////////////////////////////////////////////////////////////
@@ -129,7 +145,11 @@ int Init(int argc, char **argv){
         syslog(LOG_ERR, "Queue tocken generation failed. Error %d\n", errno);
         exit(EXIT_FAILURE);
     }
+<<<<<<< HEAD
     else if((ResultQ_id = msgget(resultsQ, IPC_CREAT | 0666)) == ERROR_RETVAL){
+=======
+    else if((ResultQueue_id = msgget(resultsQ, IPC_CREAT | 0666)) == ERROR_RETVAL){
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
         syslog(LOG_ERR, "Queue creation failed. Error %d\n", errno);
         exit(EXIT_FAILURE);
     }
@@ -142,16 +162,24 @@ int Init(int argc, char **argv){
 
 int main(int argc,char **argv)
 {
+<<<<<<< HEAD
     //pthread_t uiThread;
     pthread_t srvCmdThread;
     pthread_attr_t detachedAttr;
 
     pthread_attr_init(&detachedAttr);
     pthread_attr_setdetachstate(&detachedAttr, PTHREAD_CREATE_DETACHED);
+=======
+    pthread_t uiThread, srvCmdThread;
+    letter_t letter;
+    void * threadRetval;
+    peerArray_t peersOnline;
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
 
     Init(argc, argv);
     struct msg res_msg, comm_msg;
 
+<<<<<<< HEAD
     //msgsnd(ResultQ_id, &sentmsg, sizeof(sentmsg), 0);
 
     // create ui thread
@@ -172,12 +200,38 @@ int main(int argc,char **argv)
     // getPeer array
     if(pthread_create(&srvCmdThread, &detachedAttr, &getpeerArrMsg, NULL) == ERROR_RETVAL){
         syslog(LOG_ERR, "Update status thread creation failed. Error %d\n", errno);
+=======
+
+    getpeerArrMsg(&peersOnline);
+
+    while(1);
+
+    // create message queue
+
+
+    int received;
+    struct msg sentmsg, rcvmsg;
+    sentmsg.type = 2;
+    sentmsg.data = "This is text";
+
+    msgsnd(ResultQueue_id, &sentmsg, sizeof(sentmsg), 0);
+
+    received = msgrcv(ResultQueue_id, &rcvmsg, sizeof(rcvmsg), 0, 0);
+
+    printf("%s\n", rcvmsg.data);
+
+    // create ui thread
+    /*
+    if(pthread_create(&uiThread, NULL, &uiThreadFunc, NULL) == ERROR_RETVAL){
+        syslog(LOG_ERR, "UI thread creation failed. Error %d\n", errno);
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
         exit(EXIT_FAILURE);
     }
-
+    */
 
     while(1)
     {
+<<<<<<< HEAD
         if(msgrcv(ResultQ_id, &res_msg, sizeof(res_msg), 0, 0))
         {
             switch (res_msg.mtype) {
@@ -221,6 +275,15 @@ int main(int argc,char **argv)
 
     exit(EXIT_SUCCESS);
 }
+=======
+        // create mail check thread
+        if(pthread_create(&srvCmdThread, NULL, &sendRecv_Mail, &letter) == ERROR_RETVAL){
+            syslog(LOG_ERR, "UI thread creation failed. Error %d\n", errno);
+            exit(EXIT_FAILURE);
+        }
+
+        pthread_tryjoin_np(srvCmdThread, &threadRetval);
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
 
 void printPeerList(peerArray_t* peAr){
     unsigned int i;
@@ -244,8 +307,12 @@ void printLetter(letter_t* letter){
     printf("%s\n", letter->text);
     fflush(stdout);
 
+<<<<<<< HEAD
     free(letter->text);
     free(letter);
+=======
+    exit(EXIT_SUCCESS);
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
 }
 
 static int
@@ -282,14 +349,26 @@ parseAddrStr(struct sockaddr_in* socketAddress, char* addrString){
 int connToSrv(void){
     unsigned int retryCount=CONN_RETR_COUNT;
     unsigned int retryDelayUs=CONN_RETR_DELAY_MS * 100;
+    int connectVal=0;
 
     while(retryCount--){
+<<<<<<< HEAD
         if (connect(TCPfd, (struct sockaddr *) &Serveraddr,\
                     sizeof(Serveraddr)) == SUCCESS_RETVAL){
             return SUCCESS_RETVAL;
         }
         syslog(LOG_ERR, "Connection to server failed. Retry count %d. Error: %s",\
                retryCount, strerror(errno));
+=======
+        if ((connectVal = connect(TCPfd, (struct sockaddr *) &Serveraddr,\
+                    sizeof(Serveraddr))) == SUCCESS_RETVAL){
+            return SUCCESS_RETVAL;
+        }
+
+        syslog(LOG_ERR, "Connection to server failed. Retry count %d. Error: %s",\
+               retryCount, strerror(errno));
+
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
         usleep(retryDelayUs);
     }
 
@@ -311,9 +390,14 @@ int disconFromSev(void){
 // arg -- struct peerArray_s
 // return: NULL on fail, struct peerArray_s pointer on success
 // Warning: newPeerArray->peerArr_p must be freed
+<<<<<<< HEAD
 void * getpeerArrMsg(void* none){
     peerArray_t * newPeerArray;
     struct msg qMsg;
+=======
+void * getpeerArrMsg(void* arg){
+    peerArray_t * newPeerArray=(peerArray_t *) arg;
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
     messageHeader_t peerArrMsg;
     unsigned int errorNumber=0;
     char* errorString;
@@ -341,7 +425,11 @@ void * getpeerArrMsg(void* none){
     // recv peer array struct
     else if(sendRecv_all(TCPfd, (char*)newPeerArray, sizeof(peerArray_t), DIR_RECV) == ERROR_RETVAL){
         errorNumber=errno;
+<<<<<<< HEAD
         errorString="Recv peer array struct failed. Error %d";
+=======
+        errorString="Recv peer array struct failed. Error %d\n";
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
     }
     //processing recieved header
     else if(newPeerArray->count)
@@ -353,6 +441,7 @@ void * getpeerArrMsg(void* none){
         // recv peerArray
         if(sendRecv_all(TCPfd, (char*)newPeerArray->peerArr, peerArrayByteSize, DIR_RECV) == ERROR_RETVAL){
             errorNumber=errno;
+<<<<<<< HEAD
             errorString="Recv reply from server with message header failed. Error %d";
             free(newPeerArray->peerArr);
         }
@@ -368,8 +457,30 @@ void * getpeerArrMsg(void* none){
                    (newPeerArray->peerArr + i)->status);
             fflush(stdout);
         }
+=======
+            errorString="Recv reply from server with message header failed. Error %d\n";
+            free(newPeerArray->peerArr);
+        }
+
+#ifdef DBG
+        unsigned int i;
+
+        printf("Total peers online %d\n", newPeerArray->count);
+
+        char * cp=(newPeerArray->peerArr + 1)->name;
+        uint8_t s =(newPeerArray->peerArr + 1)->status;
+
+        for(i=0; i < newPeerArray->count; i++){
+            printf("\tName: %s\t\tStatus: %d\n",\
+                   (newPeerArray->peerArr + i)->name,\
+                   (newPeerArray->peerArr + i)->status);
+            fflush(stdout);
+        }
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
 #endif
     }
+
+
 
     disconFromSev();
 
@@ -390,6 +501,7 @@ void * getpeerArrMsg(void* none){
 }
 
 // send peerStatus to server
+<<<<<<< HEAD
 void * updateStatus(void* none){
     messageHeader_t statusMsg;
     peerParam_t* newStatus;
@@ -410,6 +522,12 @@ void * updateStatus(void* none){
     }
 
     newStatus=(peerParam_t*) commandParam.payload;
+=======
+void * updateStatus(void* status){
+    messageHeader_t statusMsg;
+    peerParam_t* newStatus=(peerParam_t*) status;
+    void * retVal = status;
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
 
     // fill header struct
     statusMsg.serviceCode=SERVICE_CODE;
@@ -418,16 +536,28 @@ void * updateStatus(void* none){
 
     connToSrv();
 
+    printf("Name %s stat %d", newStatus->name, newStatus->status);
+    fflush(stdout);
+
     // send message with status
     if(!sendRecv_all(TCPfd, (char*)&statusMsg, sizeof(statusMsg), DIR_SEND) &&\
        !sendRecv_all(TCPfd, (char*)newStatus, sizeof(peerParam_t), DIR_SEND))
     {
         syslog(LOG_ERR, "Send message of type STATus failed. Error %s", strerror(errno));
+<<<<<<< HEAD
+=======
+        retVal = NULL;
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
     }
 
     disconFromSev();
 
+<<<<<<< HEAD
     free(newStatus);
+=======
+    return retVal;
+}
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
 
     pthread_exit(NULL);
 }
@@ -436,7 +566,11 @@ void * updateStatus(void* none){
 // if passed param of type letter_t has newLetter->textSize > 0
 // than sends message else receives
 // return: NULL when failes and arg ptr when succedes
+<<<<<<< HEAD
 void * sendRecv_Mail(void * none){
+=======
+void * sendRecv_Mail(void * arg){
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
     messageHeader_t pollMsg;
     letter_t* newLetter;
     struct msg qMsg;
@@ -449,6 +583,7 @@ void * sendRecv_Mail(void * none){
     pollMsg.serviceCode=SERVICE_CODE;
     pollMsg.type=LETTER;
 
+<<<<<<< HEAD
     if(msgrcv(CommandQ_id, &qMsg, sizeof(qMsg),\
               NEW_LETTER, 0) != ERROR_RETVAL)
     {
@@ -464,10 +599,23 @@ void * sendRecv_Mail(void * none){
         syslog(LOG_ERR, "Cant't allocate memory for letter_t");
         pthread_exit(NULL);
     }
+=======
+    if(!arg){
+        printf("sendRecv_Mail func. Passed param eqv null!\n");
+        return ERROR_RETVAL;
+    }
+
+    connToSrv();
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
 
     connToSrv();
 
+<<<<<<< HEAD
     if (!dirSndRcv){
+=======
+
+    if (isSend){
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
         // send letter
         pollMsg.size=sizeof(letter_t);
 
@@ -496,7 +644,10 @@ void * sendRecv_Mail(void * none){
         {
 #ifndef DBG
             free(newLetter->text);
+<<<<<<< HEAD
             free(newLetter);
+=======
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
 #endif
         }
     }else{
@@ -526,6 +677,7 @@ void * sendRecv_Mail(void * none){
 
             //recv letter text
             if(sendRecv_all(TCPfd, (char*)newLetter->text, newLetter->textSize, DIR_RECV) == ERROR_RETVAL)
+<<<<<<< HEAD
             {
                 errorNumber=errno;
                 errorString="Recieving letter text from server. Reason %d.\n";
@@ -539,6 +691,12 @@ void * sendRecv_Mail(void * none){
                     errorNumber=errno;
                     errorString="Failed to send newLetter message to result queue. Reason %d.";
                 }
+=======
+            {
+                free(newLetter->text);
+                errorNumber=errno;
+                errorString="Recieving letter text from server. Reason %d.\n";
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
             }
         }
     }
@@ -556,10 +714,14 @@ void * sendRecv_Mail(void * none){
     pthread_exit(NULL);
 }
 
+<<<<<<< HEAD
 void * sendRecv_File(void * none){
     //supress gcc warnings
     (void)none;
 
+=======
+void * sendRecv_File(void * fileT){
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
     return NULL;
 }
 
@@ -609,3 +771,8 @@ static int parseStatusStr(peerParam_t* myParams, char * statusStr){
 
     return retVal;
 }
+<<<<<<< HEAD
+=======
+
+
+>>>>>>> e1024852260d6eb2780281e70076ca1581ac7b9b
